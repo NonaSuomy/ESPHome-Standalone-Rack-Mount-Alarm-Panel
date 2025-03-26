@@ -1,0 +1,1295 @@
+#TTGO T-Internet PoE 1.0 - Security System
+
+# GPIO39 GPIO36
+# GPIO35 GPIO34
+# GPIO32 GPIO16
+# GPIO12 GPIO33
+# GPIO15 GPIO04
+# GPIO14 GPIO02
+#    GND M3V3
+#    GND M3V3
+
+#PIN Header:
+# IO34 IO35
+# IO16 IO32
+# IO33 IO12
+# IO04 IO15
+# IO32 IO14
+
+# Internet Module HR861153C
+#  RXD0 IO25
+#  RXD1 IO26
+# CRCDV IO27
+#   MDC IO23
+#  TXD1 IO22
+# TX_EN IO21
+#  TXD0 IO19
+# MIDIO IO18
+
+# TF Card
+# MOSI IO12
+# SCLK IO15
+#   CS IO13
+# MISO IO02
+
+# ADS1115
+# VIN
+# GND
+# SCL
+# SDA
+# ADDR
+# ALRT
+
+# BME280
+# SDI
+# SCK
+# GND
+# VCC(5V)
+
+# SX1509 at address 0x3E
+# 
+#GPIO33 IR Emitter
+#GPIO35 IR Receiver
+
+globals:
+  - id: last_door_update_time
+    type: uint32_t
+    initial_value: "0"
+  - id: door_state_valid
+    type: bool
+    initial_value: "false"
+
+substitutions:
+# Common ADS1115 Sensor Setting
+  ads_gain: "6.144"
+  ads_update_interval: "100ms"
+  ads_delta: "0.2"
+  ads_heartbeat: "120s"
+  
+# Common Text Sensor Setting
+  zone_icon: "mdi:lock-alert"
+
+# Common Zone (Int) Sensor Setting
+  sensor_icon: "mdi:shield-lock"
+
+# Neopixel Brigtness
+# led_bright: "50%"
+
+# Transition Voltages between States V2 = 1.8 changed to 2.1 to fix a doorbell glitch
+# 0 -> (State1) -> V1 -> (State2) -> V2 -> (State3) -> V3 -> (State4)
+  v1: "1"
+  v2: "2.1"
+  v3: "2.5"
+
+# Text Sensor strings for each state
+  alarm_state1: "Short"
+  alarm_state2: "OK"
+  alarm_state3: "Alarm"
+  alarm_state4: "Tamper"
+
+esphome:
+  name: ttgo-poe-001
+  comment: TTGO T-Internet PoE 1.0
+  friendly_name: ttgo-poe-001
+  on_boot:
+    lambda: !lambda |-
+      if (id(open_endstop_binary_sensor).state) {
+        id(is_open).publish_state(true);
+        id(is_jammed).publish_state(false);
+        id(garage_door).position = COVER_OPEN;
+        id(garage_door).publish_state();
+      } else if (id(close_endstop_binary_sensor).state) {
+        id(is_open).publish_state(false);
+        id(is_jammed).publish_state(false);
+        id(garage_door).position = COVER_CLOSED;
+        id(garage_door).publish_state();
+      } else {
+        id(is_open).publish_state(true);
+        id(is_jammed).publish_state(true);
+        id(garage_door).position = COVER_OPEN;
+        id(garage_door).publish_state();
+      }
+
+esp32:
+  board: esp32-poe
+  framework:
+    type: arduino
+
+# Define I2C device
+# Arduino SDA A4
+#         SCL A5
+# ESP8266 SDA D2
+#         SCL D1
+# ESP32   SDA 33
+#         SCL 32
+
+i2c:
+  id: i2c_component
+  sda: 33
+  scl: 32
+  scan: true
+
+# Enable logging
+logger:
+  level: VERY_VERBOSE
+
+  logs:
+    ads1115.sensor: NONE
+    i2c.arduino: NONE
+    sensor.filter: NONE
+    scheduler: NONE
+    sensor: NONE
+    template.binary_sensor: NONE
+    api.service: NONE
+    api.connection: NONE
+    udp: VERY_VERBOSE
+    binary_sensor: VERY_VERBOSE
+#  level: INFO
+
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk_mode: GPIO17_OUT
+  phy_addr: 0
+  use_address: !secret use_address_eth004
+
+#wifi:
+#  ssid: !secret wifi_ssid
+#  password: !secret wifi_password
+#  use_address: !secret use_address_wifi004
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+#  ap:
+#    ssid: "TTGO-Poe-001 Fallback Hotspot"
+#    password: !secret fallbackhotspot004
+
+udp:
+  id: door_udp
+  port: 18511
+  #encryption: "Muddy Waters"
+  #addresses:
+  #  - !secret multicast_address004
+  binary_sensors:
+    - zone_01
+  sensors:
+    - uptime_check
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret encryption_key004
+
+ota:
+  - platform: esphome
+    password: !secret ota_pass004
+
+safe_mode:
+
+# Requires WiFi
+#improv_serial:
+
+# Requires WiFi
+#captive_portal:
+
+web_server:
+
+# SX1509 I2C I/O Expander & PWM
+sx1509:
+  - id: sx1509_hub1
+    address: 0x3E
+
+# ADS1115 Analog to Digital setup.
+ads1115:
+  # ADS1115 (ADDR => Ground)
+  # A00 Front Door Zone 1
+  # A01 Garage Door Zone 2
+  # A02 Sliding Door Zone 3
+  # A03 Kitchen Window Zone 4
+  - address: 0x48
+    id: ads1115_48
+  # ADS1115 (ADDR => VDD)
+  # A04 Zone 5 
+  # A05 Zone 6
+  # A06 Zone 7 Garage Door Open Contact
+  # A07 Zone 8 Garage Door Closed Contact
+  - address: 0x49
+    id: ads1115_49
+  # ADS1115 (ADDR => SDA)
+  # A08 Zone 9
+  # A09 Zone 10
+  # A10 Zone 11
+  # A11 Zone 12
+  - address: 0x4A
+    id: ads1115_4A
+  # ADS1115 (ADDR => SCL)
+  # A12 Zone 13
+  # A13 Zone 14
+  # A14 Zone 15
+  # A15 Zone 16
+  - address: 0x4B
+    id: ads1115_4B
+
+alarm_control_panel:
+  platform: template
+  id: acp1
+  name: Alarm Panel
+  codes:
+    - "1234"
+  requires_code_to_arm: true
+  arming_away_time: 10s
+  arming_home_time: 10s
+  pending_time: 15s
+  trigger_time: 5min
+  binary_sensors:
+    - input: zone_01
+    - input: zone_02
+    - input: zone_03
+    - input: zone_04
+      bypass_armed_home: true
+      bypass_armed_night: true
+    - input: zone_05
+      bypass_armed_home: true
+      bypass_armed_night: true
+    - input: zone_06
+      bypass_armed_home: true
+      bypass_armed_night: true
+    - input: open_endstop_binary_sensor
+      bypass_armed_home: true
+      bypass_armed_night: true
+    - input: close_endstop_binary_sensor
+      bypass_armed_home: true
+      bypass_armed_night: true
+    - input: zone_09
+    - input: zone_10
+    - input: zone_11
+    - input: zone_12
+    - input: zone_13
+    - input: zone_14
+    - input: zone_15
+    - input: zone_16
+  on_state:
+    then:
+      - lambda: !lambda |-
+          ESP_LOGD("TEST", "State change %s", alarm_control_panel_state_to_string(id(acp1)->get_state()));
+  on_triggered:
+    then:
+      #- switch.turn_on: siren_inside
+      #- switch.turn_on: siren_outside
+  on_cleared:
+    then:
+      #- switch.turn_off: siren_inside
+      #- switch.turn_off: siren_outside
+
+binary_sensor:
+  - platform: template
+    name: "Garage door is jammed"
+    id: is_jammed
+    device_class: problem
+  - platform: template
+    name: "Garage door is open"
+    id: is_open
+    device_class: garage_door
+  - platform: template
+    name: "Zone 01"
+    id: zone_01
+    device_class: door
+    lambda: return (id(zone_01_str).state != "OK");
+    on_state:
+      then:
+        - logger.log:
+            format: "Zone 01 state changed to: %s"
+            args: ['ONOFF(x)']
+            level: DEBUG
+  - platform: template
+    name: Zone 01 Tamper
+    id: zone_01_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_01_str).state == "Tamper") || (id(zone_01_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 02
+    id: zone_02
+    device_class: door
+    lambda: return (id(zone_02_str).state != "OK");
+  - platform: template
+    name: Zone 02 Tamper
+    id: zone_02_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_02_str).state == "Tamper") || (id(zone_02_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 03
+    id: zone_03
+    device_class: door
+    lambda: return (id(zone_03_str).state != "OK");
+  - platform: template
+    name: Zone 03 Tamper
+    id: zone_03_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_03_str).state == "Tamper") || (id(zone_03_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 04
+    id: zone_04
+    device_class: window
+    lambda: return (id(zone_04_str).state != "OK");
+  - platform: template
+    name: Zone 04 Tamper
+    id: zone_04_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_04_str).state == "Tamper") || (id(zone_04_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 05
+    id: zone_05
+    device_class: window
+    lambda: return (id(zone_05_str).state != "OK");
+  - platform: template
+    name: Zone 05 Tamper
+    id: zone_05_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_05_str).state == "Tamper") || (id(zone_05_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 06
+    id: zone_06
+    device_class: window
+    lambda: return (id(zone_06_str).state != "OK");
+  - platform: template
+    name: Zone 06 Tamper
+    id: zone_06_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_06_str).state == "Tamper") || (id(zone_06_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Garage Door Close Sensor
+    id: close_endstop_binary_sensor
+    device_class: garage_door
+    lambda: return (id(zone_07_str).state != "OK");
+    #inverted: true
+    #internal: true
+    on_press:
+       - cover.template.publish:
+           id: garage_door
+           state: OPEN
+           current_operation: IDLE
+       - binary_sensor.template.publish:
+          id: is_jammed
+          state: OFF
+    on_release: 
+       - cover.template.publish:
+           id: garage_door
+           current_operation: CLOSING  
+       # Garage door takes 16s
+       - delay: 25s
+       - if:
+           condition:
+             and:
+               - binary_sensor.is_off: close_endstop_binary_sensor
+               - binary_sensor.is_off: open_endstop_binary_sensor
+           then: 
+              - binary_sensor.template.publish:
+                  id: is_jammed
+                  state: ON
+  - platform: template
+    name: Zone 07 Tamper
+    id: zone_07_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_07_str).state == "Tamper") || (id(zone_07_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Garage Door Open Sensor
+    id: open_endstop_binary_sensor
+    device_class: garage_door
+    lambda: return (id(zone_08_str).state != "OK");
+    #inverted: true
+    #internal: true
+    on_press:
+       - cover.template.publish:
+           id: garage_door
+           state: CLOSED
+           current_operation: IDLE
+       - binary_sensor.template.publish:
+          id: is_jammed
+          state: OFF
+       - binary_sensor.template.publish:
+          id: is_open
+          state: OFF
+    on_release: 
+       - cover.template.publish:
+           id: garage_door
+           current_operation: OPENING    
+       - binary_sensor.template.publish:
+          id: is_open
+          state: ON
+       - delay: 25s
+       - if:
+           condition:
+             and:
+               - binary_sensor.is_off: open_endstop_binary_sensor
+               - binary_sensor.is_off: close_endstop_binary_sensor
+           then: 
+              - binary_sensor.template.publish:
+                  id: is_jammed
+                  state: ON
+  - platform: template
+    name: Zone 08 Tamper
+    id: zone_08_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_08_str).state == "Tamper") || (id(zone_08_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 09
+    id: zone_09
+    device_class: window
+    lambda: return (id(zone_09_str).state != "OK");
+  - platform: template
+    name: Zone 09 Tamper
+    id: zone_09_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_09_str).state == "Tamper") || (id(zone_09_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 10
+    id: zone_10
+    device_class: window
+    lambda: return (id(zone_10_str).state != "OK");
+  - platform: template
+    name: Zone 10 Tamper
+    id: zone_10_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_10_str).state == "Tamper") || (id(zone_10_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 11
+    id: zone_11
+    device_class: window
+    lambda: return (id(zone_11_str).state != "OK");
+  - platform: template
+    name: Zone 11 Tamper
+    id: zone_11_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_11_str).state == "Tamper") || (id(zone_11_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 12
+    id: zone_12
+    device_class: window
+    lambda: return (id(zone_12_str).state != "OK");
+  - platform: template
+    name: Zone 12 Tamper
+    id: zone_12_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_12_str).state == "Tamper") || (id(zone_12_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 13
+    id: zone_13
+    device_class: window
+    lambda: return (id(zone_13_str).state != "OK");
+  - platform: template
+    name: Zone 13 Tamper
+    id: zone_13_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_13_str).state == "Tamper") || (id(zone_13_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 14
+    id: zone_14
+    device_class: window
+    lambda: return (id(zone_14_str).state != "OK");
+  - platform: template
+    name: Zone 14 Tamper
+    id: zone_14_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_14_str).state == "Tamper") || (id(zone_14_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 15
+    id: zone_15
+    device_class: window
+    lambda: return (id(zone_15_str).state != "OK");
+  - platform: template
+    name: Zone 15 Tamper
+    id: zone_15_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_15_str).state == "Tamper") || (id(zone_15_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+  - platform: template
+    name: Zone 16
+    id: zone_16
+    device_class: window
+    lambda: return (id(zone_16_str).state != "OK");
+  - platform: template
+    name: Zone 16 Tamper
+    id: zone_16_tamper
+    device_class: tamper
+    lambda: |-
+      if ((id(zone_16_str).state == "Tamper") || (id(zone_16_str).state == "Short")) {
+        return true;
+      } else {
+        return false;
+      }
+cover:
+  - platform: template
+    id: garage_door
+    name: "Garage Door"
+    device_class: garage
+    open_action:
+      - if:
+          condition:
+            - and:
+              - switch.is_off: virtual_lock
+              - binary_sensor.is_on: close_endstop_binary_sensor
+          then: 
+            - switch.turn_on: opener_switch
+    close_action:
+      - if:
+          condition:
+            - and:
+              - switch.is_off: virtual_lock
+              - binary_sensor.is_on: open_endstop_binary_sensor
+          then: 
+            - switch.turn_on: opener_switch
+    stop_action:
+      - if:
+          condition:
+            - and:
+              - switch.is_off: virtual_lock
+              - binary_sensor.is_off: close_endstop_binary_sensor
+              - binary_sensor.is_off: open_endstop_binary_sensor
+          then: 
+            - switch.turn_on: opener_switch
+
+switch:
+  - platform: gpio
+    #name: "SX1509 Pin #0"
+    id: opener_light
+    name: Opener Light
+    pin:
+      sx1509: sx1509_hub1
+      # Use pin number 0 on the SX1509
+      number: 0
+      # use as output for switch
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    #name: "SX1509 Pin #1"
+    id: opener_switch
+    name: Opener Switch
+    pin:
+      sx1509: sx1509_hub1
+      # Use pin number 1 on the SX1509
+      number: 1
+      # use as output for switch
+      mode:
+        output: true
+      inverted: false
+    on_turn_on:
+    - delay: 250ms
+    - switch.turn_off: opener_switch
+
+  - platform: restart
+    name: "T-PoE Restart"
+  - platform: template
+    name: "Virtual Lock"
+    id: virtual_lock
+    optimistic: true
+
+# Define analog sensors
+sensor:
+  - platform: uptime
+    id: uptime_check
+    name: Uptime Sensor
+
+    # Integer State Sensors, Controls Zone Text Sensor and Zone Indicator LED Effect
+  - platform: template
+    name: "Zone 01 Sensor"
+    id: zone_01_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_01_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 02 Sensor"
+    id: zone_02_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_02_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 03 Sensor"
+    id: zone_03_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_03_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 04 Sensor"
+    id: zone_04_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_04_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 05 Sensor"
+    id: zone_05_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_05_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 06 Sensor"
+    id: zone_06_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_06_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 07 Sensor"
+    id: zone_07_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_07_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 08 Sensor"
+    id: zone_08_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_08_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 09 Sensor"
+    id: zone_09_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_09_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 10 Sensor"
+    id: zone_10_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_10_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 11 Sensor"
+    id: zone_11_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_11_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 12 Sensor"
+    id: zone_12_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_12_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 13 Sensor"
+    id: zone_13_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_13_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 14 Sensor"
+    id: zone_14_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_14_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 15 Sensor"
+    id: zone_15_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_15_str).publish_state(out_state[y]);
+  - platform: template
+    name: "Zone 16 Sensor"
+    id: zone_16_int
+    icon: "${sensor_icon}"
+    on_value:
+      # When Zone state (1-4) changes, set effect if Lights enabled, Set Text State
+      - lambda: |-
+          std::string out_state[] = {"Unset","${alarm_state1}","${alarm_state2}","${alarm_state3}","${alarm_state4}" };
+          int y = (int) x;
+          id(zone_16_str).publish_state(out_state[y]);
+
+  - name: "Zone 01 Voltage"
+    id: ads1115_48_a0
+    ads1115_id: ads1115_48
+    platform: ads1115
+    multiplexer: 'A0_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_01_int).state != y) {
+              id(zone_01_int).publish_state(y);
+            }
+  - name: "Zone 02 Voltage"
+    id: ads1115_48_a1
+    ads1115_id: ads1115_48
+    platform: ads1115
+    multiplexer: 'A1_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_02_int).state != y) {
+              id(zone_02_int).publish_state(y);
+            }
+  - name: "Zone 03 Voltage"
+    id: ads1115_48_a2
+    ads1115_id: ads1115_48
+    platform: ads1115
+    multiplexer: 'A2_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_03_int).state != y) {
+              id(zone_03_int).publish_state(y);
+            }
+  - name: "Zone 04 Voltage"
+    id: ads1115_48_a3
+    ads1115_id: ads1115_48
+    platform: ads1115
+    multiplexer: 'A3_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_04_int).state != y) {
+              id(zone_04_int).publish_state(y);
+            }
+  - name: "Zone 05 Voltage"
+    id: ads1115_49_a0
+    ads1115_id: ads1115_49
+    platform: ads1115
+    multiplexer: 'A0_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_05_int).state != y) {
+              id(zone_05_int).publish_state(y);
+            }
+  - name: "Zone 06 Voltage"
+    id: ads1115_49_a1
+    ads1115_id: ads1115_49
+    platform: ads1115
+    multiplexer: 'A1_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_06_int).state != y) {
+              id(zone_06_int).publish_state(y);
+            }
+  - name: "Zone 07 Voltage"
+    id: ads1115_49_a2
+    ads1115_id: ads1115_49
+    platform: ads1115
+    multiplexer: 'A2_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_07_int).state != y) {
+              id(zone_07_int).publish_state(y);
+            }
+  - name: "Zone 08 Voltage"
+    id: ads1115_49_a3
+    ads1115_id: ads1115_49
+    platform: ads1115
+    multiplexer: 'A3_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_08_int).state != y) {
+              id(zone_08_int).publish_state(y);
+            }
+
+  - name: "Zone 09 Voltage"
+    id: ads1115_4A_a0
+    ads1115_id: ads1115_4A
+    platform: ads1115
+    multiplexer: 'A0_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_09_int).state != y) {
+              id(zone_09_int).publish_state(y);
+            }
+  - name: "Zone 10 Voltage"
+    id: ads1115_4A_a1
+    ads1115_id: ads1115_4A
+    platform: ads1115
+    multiplexer: 'A1_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_10_int).state != y) {
+              id(zone_10_int).publish_state(y);
+            }
+  - name: "Zone 11 Voltage"
+    id: ads1115_4A_a2
+    ads1115_id: ads1115_4A
+    platform: ads1115
+    multiplexer: 'A2_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_11_int).state != y) {
+              id(zone_11_int).publish_state(y);
+            }
+  - name: "Zone 12 Voltage"
+    id: ads1115_4A_a3
+    ads1115_id: ads1115_4A
+    platform: ads1115
+    multiplexer: 'A3_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_12_int).state != y) {
+              id(zone_12_int).publish_state(y);
+            }
+  - name: "Zone 13 Voltage"
+    id: ads1115_4B_a0
+    ads1115_id: ads1115_4B
+    platform: ads1115
+    multiplexer: 'A0_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_13_int).state != y) {
+              id(zone_13_int).publish_state(y);
+            }
+  - name: "Zone 14 Voltage"
+    id: ads1115_4B_a1
+    ads1115_id: ads1115_4B
+    platform: ads1115
+    multiplexer: 'A1_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_14_int).state != y) {
+              id(zone_14_int).publish_state(y);
+            }
+  - name: "Zone 15 Voltage"
+    id: ads1115_4B_a2
+    ads1115_id: ads1115_4B
+    platform: ads1115
+    multiplexer: 'A2_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red_Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_15_int).state != y) {
+              id(zone_15_int).publish_state(y);
+            }
+  - name: "Zone 16 Voltage"
+    id: ads1115_4B_a3
+    ads1115_id: ads1115_4B
+    platform: ads1115
+    multiplexer: 'A3_GND'
+    resolution: 16_BITS
+    gain: ${ads_gain}
+    update_interval: ${ads_update_interval}
+    internal: false
+    filters:
+      - or:
+        - delta: ${ads_delta}
+        - heartbeat: ${ads_heartbeat}
+    on_value:
+      then:
+        # Compare Reading to Ref voltages and set zone state (Int) if changed.
+        - lambda: |-
+            int y = 0;
+            if (x > ${v3}) { y = 4; }                     // # State 4 = Tamper/Short = Red Blink
+            else if (x > ${v2} && x <= ${v3}) { y = 3; }  // # State 3 = Alarm = Red
+            else if (x > ${v1} && x <= ${v2}) { y = 2; }  // # State 2 = OK = Green
+            else if (x <= ${v1}) { y = 1; }               // # State 1 = Short = Red Blink
+            if (id(zone_16_int).state != y) {
+              id(zone_16_int).publish_state(y);
+            }
+# Text Sensors visible to HA, 1 per Zone
+text_sensor:
+  - platform: template
+    name: "Zone 01 State"
+    icon: "${zone_icon}"
+    id: zone_01_str
+  - platform: template
+    name: "Zone 02 State"
+    icon: "${zone_icon}"
+    id: zone_02_str
+  - platform: template
+    name: "Zone 03 State"
+    icon: "${zone_icon}"
+    id: zone_03_str
+  - platform: template
+    name: "Zone 04 State"
+    icon: "${zone_icon}"
+    id: zone_04_str
+  - platform: template
+    name: "Zone 05 State"
+    icon: "${zone_icon}"
+    id: zone_05_str
+  - platform: template
+    name: "Zone 06 State"
+    icon: "${zone_icon}"
+    id: zone_06_str
+  - platform: template
+    name: "Zone 07 State"
+    icon: "${zone_icon}"
+    id: zone_07_str
+  - platform: template
+    name: "Zone 08 State"
+    icon: "${zone_icon}"
+    id: zone_08_str
+  - platform: template
+    name: "Zone 09 State"
+    icon: "${zone_icon}"
+    id: zone_09_str
+  - platform: template
+    name: "Zone 10 State"
+    icon: "${zone_icon}"
+    id: zone_10_str
+  - platform: template
+    name: "Zone 11 State"
+    icon: "${zone_icon}"
+    id: zone_11_str
+  - platform: template
+    name: "Zone 12 State"
+    icon: "${zone_icon}"
+    id: zone_12_str
+  - platform: template
+    name: "Zone 13 State"
+    icon: "${zone_icon}"
+    id: zone_13_str
+  - platform: template
+    name: "Zone 14 State"
+    icon: "${zone_icon}"
+    id: zone_14_str
+  - platform: template
+    name: "Zone 15 State"
+    icon: "${zone_icon}"
+    id: zone_15_str
+  - platform: template
+    name: "Zone 16 State"
+    icon: "${zone_icon}"
+    id: zone_16_str
