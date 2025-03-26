@@ -14,6 +14,8 @@ Window/Door sensors
 
 ...
 
+![image](https://github.com/user-attachments/assets/a1c0ea00-7322-4202-81cf-a1e0ac57ed75)
+
 ![IMG_4221](https://github.com/NonaSuomy/SamsungTV-RS232-EX-LINK/assets/1906575/7c473eed-0ca8-4167-87b7-3281c3cc9de1)
 ![FC9163A7-617C-4E4A-9517-B54A8DAF618D](https://github.com/user-attachments/assets/9a1f8d9d-ef06-49ef-b1f7-93d66d176852)
 
